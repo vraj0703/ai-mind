@@ -10,9 +10,12 @@ class FileStateWriter extends IStateWriter {
   constructor(opts = {}) {
     super();
     const root = opts.projectRoot || process.cwd();
-    this.sessionPath = opts.sessionPath || path.join(root, "senses", "interoception", "state", "session.toml");
-    this.heartbeatPath = opts.heartbeatPath || path.join(root, "senses", "interoception", "state", "HEARTBEAT.toml");
-    this.decisionsPath = opts.decisionsPath || path.join(root, "senses", "nociception", "logs", "cortex-decisions.jsonl");
+    // Post-cutover: state lives under senses/data/data_sources/local/state-live/
+    // (surfaced via the state/ symlink at root).
+    const stateDir = path.join(root, "senses", "data", "data_sources", "local", "state-live");
+    this.sessionPath   = opts.sessionPath   || path.join(stateDir, "session.toml");
+    this.heartbeatPath = opts.heartbeatPath || path.join(stateDir, "HEARTBEAT.toml");
+    this.decisionsPath = opts.decisionsPath || path.join(stateDir, "decisions.jsonl");
   }
 
   async writeSession(state) {

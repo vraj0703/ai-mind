@@ -19,14 +19,13 @@ const { createServer } = require("./presentation/pages/server");
 const PROJECT_ROOT = path.resolve(__dirname, "..");
 const PORT = parseInt(process.env.MIND_PORT) || 3486;
 
-// ─── Services to monitor (same as cortex config, migrated here) ───
+// ─── v2 organs to monitor (post-decommission, all at root) ───
+// Mind is the supervisor; it does NOT monitor itself (3486).
 const SERVICES = [
-  { name: "whatsapp",       port: 3478, health_url: "http://127.0.0.1:3478/health" },
-  { name: "cron",           port: 3479, health_url: "http://127.0.0.1:3479/health" },
-  { name: "content-engine", port: 3480, health_url: "http://127.0.0.1:3480/health", restart_enabled: false },
-  { name: "dashboard",      port: 3482, health_url: "http://127.0.0.1:3482/health" },
-  { name: "brain",          port: 3483, health_url: "http://127.0.0.1:3483/health" },
-  { name: "knowledge",      port: 3489, health_url: "http://127.0.0.1:3489/health" },
+  { name: "memory",    port: 3488, health_url: "http://127.0.0.1:3488/health" },
+  { name: "senses",    port: 3487, health_url: "http://127.0.0.1:3487/health" },
+  { name: "knowledge", port: 3489, health_url: "http://127.0.0.1:3489/health" },
+  { name: "dashboard", port: 3491, health_url: "http://127.0.0.1:3491/health" },
 ];
 
 async function main() {
