@@ -1,0 +1,211 @@
+# scoring.toml — PM Focus System Priority Scoring Algorithm
+# Authority: PM Vishal via plans/pm-focus-system.toml (T1)
+# Designed by: Ministry of Planning
+# Version: 1.0 | Created: 2026-03-19
+#
+# Purpose: Score every non-completed task across all active plans to determine
+# which items need PM attention. Top 5 scores appear in the morning brief.
+#
+# Formula: score = clamp(0, 100,
+#   W_urgency * urgency
+# + W_dependency * dependency_impact
+# + W_owner * owner_boost
+# + W_domain * domain_weight
+# + W_staleness * staleness
+# + W_cascade * cascade_bonus
+# )
+
+# ─────────────────────────────────────────
+# WEIGHTS (must sum to ~100 for interpretability)
+# ─────────────────────────────────────────
+
+[weights]
+urgency             = 25      # deadline proximity
+dependency_impact   = 20      # how many tasks this blocks
+owner_boost         = 20      # PM-owned / resident_input tasks
+domain_priority     = 15      # plan-level priority
+staleness           = 10      # days waiting with no progress
+cascade_bonus       = 10      # unblocks a chain of 3+ tasks
+
+# ─────────────────────────────────────────
+# COMPONENT DEFINITIONS
+# ─────────────────────────────────────────
+
+[urgency]
+description = "How close is the plan deadline? Closer = higher urgency."
+# Score 0.0-1.0 based on days remaining until plan deadline
+# Formula: urgency = max(0, 1 - (days_remaining / horizon_days))
+# Overdue plans get urgency = 1.0 (maximum)
+horizon_days        = 60      # plans >60 days out score 0 urgency
+overdue_score       = 1.0     # overdue plans always max urgency
+# Thresholds for human-readable labels:
+critical_days       = 7       # <= 7 days: "URGENT"
+warning_days        = 14      # <= 14 days: "SOON"
+normal_days         = 30      # <= 30 days: "NORMAL"
+# label beyond 30 days: "LOW"
+
+[dependency_impact]
+description = "How many tasks are directly blocked by this task?"
+# Score 0.0-1.0 based on count of downstream dependents
+# Formula: impact = min(1.0, blocked_count / max_blocked)
+max_blocked         = 5       # 5+ blocked tasks = max score (1.0)
+# Calculation: count all tasks across ALL plans where depends_on includes this task ID
+
+[owner_boost]
+description = "Tasks owned by PM or typed as resident_input get priority."
+# Fixed boost values (0.0-1.0):
+pm_owner            = 1.0     # task.owner == "pm"
+resident_input      = 1.0     # task.type == "resident_input"
+mr_v_owner          = 0.3     # task.owner == "mr-v" (PM may need to unblock)
+minister_owner      = 0.0     # task.owner == "minister-*" (no PM attention needed)
+sherpa_owner        = 0.0     # task.owner == "sherpa-*"
+
+[domain_priority]
+description = "Plan-level priority mapped to a 0.0-1.0 score."
+critical            = 1.0     # operation-swavalamban, career-vishal, master-plan
+high                = 0.7     # infrastructure, pm-focus-system, finance, health
+medium              = 0.4     # house-operations, house-infrastructure
+low                 = 0.1     # deferred items
+
+[staleness]
+description = "Days since task was created or last updated with no progress."
+# Score 0.0-1.0 based on days stale
+# Formula: staleness = min(1.0, days_stale / max_stale_days)
+max_stale_days      = 14      # tasks stale 14+ days = max score
+# days_stale = today - max(task.started, task.created, plan.updated)
+# Only applies to non-completed tasks
+
+[cascade_bonus]
+description = "Bonus for tasks that unblock a chain of 3+ downstream tasks."
+# Walk the dependency graph: count total transitive dependents
+# Score 0.0-1.0:
+threshold           = 3       # chain of 3+ dependents triggers bonus
+# Formula: cascade = chain_length >= threshold ? min(1.0, chain_length / max_chain) : 0
+max_chain           = 8       # 8+ chain = max bonus (1.0)
+
+# ─────────────────────────────────────────
+# FILTERING RULES
+# ─────────────────────────────────────────
+
+[filters]
+description = "Which tasks enter the scoring pipeline"
+include_statuses    = ["pending", "in_progress", "blocked"]
+exclude_statuses    = ["completed", "skipped"]
+include_plan_statuses = ["active", "draft"]       # closed plans excluded
+exclude_owners      = []                           # score ALL owners, but owner_boost differentiates
+min_score_for_brief = 20      # tasks scoring <20 never appear in brief
+max_brief_items     = 5       # morning brief shows top 5
+
+# ─────────────────────────────────────────
+# PM RESPONSE ACTIONS
+# ─────────────────────────────────────────
+
+[actions]
+description = "How PM can respond to morning brief items via WhatsApp"
+
+[actions.done]
+syntax              = "done <plan-id>:<task-id>"
+example             = "done career-vishal:T1"
+effect              = "Marks task status = completed, records completed date"
+
+[actions.skip]
+syntax              = "skip <plan-id>:<task-id>"
+example             = "skip raj-sadan-infrastructure:T2"
+effect              = "Dismisses item for today. Won't appear again until tomorrow. Stored in focus state."
+
+[actions.later]
+syntax              = "later"
+effect              = "Defers entire brief. All items reappear tomorrow with +1 staleness."
+
+[actions.focus]
+syntax              = "focus <plan-id>:<task-id>"
+example             = "focus career-vishal:T1"
+effect              = "Pin this task — it appears first in every brief until completed or unpinned."
+
+[actions.unpin]
+syntax              = "unpin <plan-id>:<task-id>"
+effect              = "Remove pin from a previously focused task."
+
+# ─────────────────────────────────────────
+# MORNING BRIEF FORMAT
+# ─────────────────────────────────────────
+
+[brief]
+description         = "WhatsApp morning brief format — plain text, no markdown"
+schedule            = "0 8 * * *"    # 8:00 AM IST daily
+timezone            = "Asia/Kolkata"
+target_group        = "general"
+max_items           = 5
+
+# Template (plain text for WhatsApp):
+# Lines starting with # are comments, not included in output
+template = """
+Good morning PM.
+
+Your top {count} items today:
+
+{items}
+
+Reply:
+done plan:task - mark complete
+skip plan:task - dismiss today
+later - defer all
+focus plan:task - pin to top
+
+{pinned_section}
+{stats_line}
+"""
+
+# Each item formatted as:
+item_format         = "{rank}. [{urgency_label}] {task_name}\n   {plan_name} | {task_id}\n   Why: {why_reason}"
+
+# Stats line:
+stats_format        = "{total_pending} tasks pending | {pm_blocked} waiting on you | {completed_today} done today"
+
+# Pinned section (only if pinned items exist):
+pinned_format       = "Pinned: {pinned_items}"
+
+# ─────────────────────────────────────────
+# SCORING EXAMPLES
+# ─────────────────────────────────────────
+
+# Example 1: career-vishal:T1 — "PM: Career focus session"
+# owner=pm, type=resident_input, plan_priority=critical, deadline=2026-04-15 (27 days)
+# blocks: T2, T3, T4, T6, T8 (5 direct), cascade: T5, T7, T9 (chain=8)
+# stale: 7 days (created 2026-03-12, no update)
+#
+# urgency     = max(0, 1 - 27/60) = 0.55    * 25 = 13.75
+# dependency  = min(1, 5/5) = 1.0            * 20 = 20.00
+# owner_boost = 1.0 (pm + resident_input)    * 20 = 20.00
+# domain      = 1.0 (critical)               * 15 = 15.00
+# staleness   = min(1, 7/14) = 0.5           * 10 =  5.00
+# cascade     = min(1, 8/8) = 1.0            * 10 = 10.00
+# TOTAL = 83.75 → rank HIGH
+
+# Example 2: raj-sadan-infrastructure:T1 — "Design monitoring dashboard layout"
+# owner=minister-planning, type=delegation, plan_priority=high, deadline=2026-03-17 (OVERDUE)
+# blocks: T2 (1 direct), cascade: T2→T3→T4 (chain=3)
+# stale: 9 days
+#
+# urgency     = 1.0 (overdue)                * 25 = 25.00
+# dependency  = min(1, 1/5) = 0.2            * 20 =  4.00
+# owner_boost = 0.0 (minister)               * 20 =  0.00
+# domain      = 0.7 (high)                   * 15 = 10.50
+# staleness   = min(1, 9/14) = 0.64          * 10 =  6.43
+# cascade     = min(1, 3/8) = 0.375          * 10 =  3.75
+# TOTAL = 49.68 → rank MEDIUM
+# Note: low score because PM doesn't own it — Mr. V should delegate, not bother PM
+
+# Example 3: operation-swavalamban:T18 — "Launch 3 YouTube channels"
+# owner=mr-v, type=delegation, plan_priority=critical, deadline=2026-05-10 (52 days)
+# blocks: none directly in this plan, cascade: T26→T27 via master-plan (chain=2)
+# stale: 8 days (in_progress since 2026-03-11)
+#
+# urgency     = max(0, 1 - 52/60) = 0.13    * 25 =  3.33
+# dependency  = 0/5 = 0.0                    * 20 =  0.00
+# owner_boost = 0.3 (mr-v)                   * 20 =  6.00
+# domain      = 1.0 (critical)               * 15 = 15.00
+# staleness   = min(1, 8/14) = 0.57          * 10 =  5.71
+# cascade     = 2 < 3 threshold = 0.0        * 10 =  0.00
+# TOTAL = 30.04 → rank LOW-MEDIUM
+# Note: Mr. V task, far deadline, no PM action needed — correct behavior

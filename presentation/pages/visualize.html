@@ -1,0 +1,460 @@
+<!DOCTYPE html><html lang="en"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Raj Sadan v2 — Live System Visualization</title>
+<script src="https://unpkg.com/cytoscape@3.30.4/dist/cytoscape.min.js"></script>
+<script src="https://unpkg.com/dagre@0.8.5/dist/dagre.min.js"></script>
+<script src="https://unpkg.com/cytoscape-dagre@2.5.0/cytoscape-dagre.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Segoe UI', system-ui, sans-serif; background: #0a0a0f; color: #e0e0e0; display: flex; flex-direction: column; height: 100vh; }
+  header { background: #12121a; border-bottom: 1px solid #2a2a3a; padding: 12px 24px; display: flex; align-items: center; justify-content: space-between; }
+  header h1 { font-size: 1.1rem; font-weight: 600; color: #fff; letter-spacing: -0.01em; }
+  header .stats { font-size: 0.75rem; color: #888; font-family: 'Consolas', monospace; }
+  .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+  .status-dot.up { background: #10b981; } .status-dot.down { background: #ef4444; } .status-dot.warn { background: #f59e0b; }
+  .controls { display: flex; gap: 8px; align-items: center; }
+  .controls button { padding: 6px 14px; border-radius: 6px; border: 1px solid #333; background: #1a1a2e; color: #ccc; font-size: 0.75rem; cursor: pointer; transition: all 0.15s; }
+  .controls button:hover { background: #252540; color: #fff; }
+  .controls button.active { background: #3b82f6; color: #fff; border-color: #3b82f6; }
+  #cy { flex: 1; background: #0a0a0f; }
+  .panel { position: absolute; bottom: 16px; right: 16px; background: #12121a; border: 1px solid #2a2a3a; border-radius: 10px; padding: 16px; width: 320px; max-height: 50vh; overflow-y: auto; font-size: 0.8rem; z-index: 10; display: none; }
+  .panel.visible { display: block; }
+  .panel h3 { font-size: 0.85rem; margin-bottom: 8px; color: #fff; }
+  .panel .row { display: flex; justify-content: space-between; padding: 4px 0; border-bottom: 1px solid #1a1a2a; }
+  .panel .label { color: #888; } .panel .value { color: #e0e0e0; font-family: 'Consolas', monospace; }
+  .legend { position: absolute; top: 70px; left: 16px; background: #12121aee; border: 1px solid #2a2a3a; border-radius: 8px; padding: 12px; font-size: 0.7rem; z-index: 10; }
+  .legend-item { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
+  .legend-color { width: 14px; height: 14px; border-radius: 3px; }
+  .edit-panel { position: absolute; top: 70px; right: 16px; background: #12121a; border: 1px solid #2a2a3a; border-radius: 10px; padding: 16px; width: 260px; font-size: 0.8rem; z-index: 10; display: none; }
+  .edit-panel.visible { display: block; }
+  .edit-panel h3 { font-size: 0.8rem; color: #fff; margin-bottom: 6px; }
+  .edit-panel input, .edit-panel select { width: 100%; padding: 6px 8px; margin-bottom: 6px; border-radius: 4px; border: 1px solid #333; background: #1a1a2e; color: #ddd; font-size: 0.75rem; font-family: 'Consolas', monospace; }
+  .edit-panel button { width: 100%; padding: 6px; border-radius: 4px; border: 1px solid #3b82f6; background: #1e3a5f; color: #93c5fd; font-size: 0.75rem; cursor: pointer; margin-bottom: 4px; }
+  .edit-panel button:hover { background: #2a4a6f; }
+</style>
+</head><body>
+<header>
+  <h1>Raj Sadan v2 — Live System Visualization</h1>
+  <div class="stats" id="stats">loading...</div>
+  <div class="controls">
+    <button id="btn-fit" onclick="cy.fit(50)">Fit</button>
+    <button id="btn-layout" onclick="runLayout()">Re-layout</button>
+    <button id="btn-refresh" onclick="refresh()">Refresh</button>
+    <button id="btn-labels" class="active" onclick="toggleLabels(this)">Labels</button>
+    <button id="btn-edit" onclick="toggleEdit(this)">Edit Mode</button>
+    <button id="btn-export" onclick="exportGraph()">Export JSON</button>
+    <button id="btn-import" onclick="document.getElementById('import-file').click()">Import JSON</button>
+    <input type="file" id="import-file" accept=".json" style="display:none" onchange="importGraph(event)">
+  </div>
+</header>
+
+<div id="cy"></div>
+
+<div class="legend">
+  <div class="legend-item"><div class="legend-color" style="background:#f59e0b"></div> Mind (cognition)</div>
+  <div class="legend-item"><div class="legend-color" style="background:#3b82f6"></div> Senses (perception)</div>
+  <div class="legend-item"><div class="legend-color" style="background:#8b5cf6"></div> Memory (persistence)</div>
+  <div class="legend-item"><div class="legend-color" style="background:#10b981"></div> Healthy service</div>
+  <div class="legend-item"><div class="legend-color" style="background:#ef4444"></div> Down service</div>
+  <div class="legend-item"><div class="legend-color" style="background:#6b7280"></div> External dependency</div>
+</div>
+
+<div class="edit-panel" id="edit-panel">
+  <h3>Add Node</h3>
+  <input type="text" id="new-node-id" placeholder="node-id">
+  <input type="text" id="new-node-label" placeholder="Label (use \n for newline)">
+  <select id="new-node-parent">
+    <option value="">-- top level --</option>
+    <option value="mind">Mind</option>
+    <option value="senses">Senses</option>
+    <option value="memory">Memory</option>
+  </select>
+  <select id="new-node-type">
+    <option value="usecase">Use Case</option>
+    <option value="organ">Organ Cluster</option>
+    <option value="service">Service</option>
+    <option value="external">External</option>
+    <option value="pm">PM</option>
+  </select>
+  <button onclick="addNode()">+ Add Node</button>
+  <h3 style="margin-top:12px">Add Edge</h3>
+  <input type="text" id="new-edge-from" placeholder="from node id">
+  <input type="text" id="new-edge-to" placeholder="to node id">
+  <input type="text" id="new-edge-label" placeholder="edge label">
+  <button onclick="addEdge()">+ Add Edge</button>
+  <h3 style="margin-top:12px">Selected</h3>
+  <div id="selected-info" style="color:#888;font-size:0.75rem">Click a node/edge, then press Delete to remove</div>
+</div>
+
+<div class="panel" id="detail-panel">
+  <h3 id="panel-title">—</h3>
+  <div id="panel-body"></div>
+</div>
+
+<script>
+cytoscape.use(cytoscapeDagre);
+
+const MIND_URL = 'http://127.0.0.1:3486';
+const SENSES_URL = 'http://127.0.0.1:3487';
+const MEMORY_URL = 'http://127.0.0.1:3488';
+
+let labelsVisible = true;
+
+// ─── Build graph data ───
+
+async function fetchSystemData() {
+  const [mindHealth, mindStatus, sensesHealth, sensesStats, memHealth, memStats] = await Promise.allSettled([
+    fetch(`${MIND_URL}/health`).then(r => r.json()),
+    fetch(`${MIND_URL}/status`).then(r => r.json()),
+    fetch(`${SENSES_URL}/health`).then(r => r.json()),
+    fetch(`${SENSES_URL}/stats`).then(r => r.json()),
+    fetch(`${MEMORY_URL}/health`).then(r => r.json()),
+    fetch(`${MEMORY_URL}/stats`).then(r => r.json()),
+  ]);
+
+  return {
+    mind: { health: val(mindHealth), status: val(mindStatus) },
+    senses: { health: val(sensesHealth), stats: val(sensesStats) },
+    memory: { health: val(memHealth), stats: val(memStats) },
+  };
+}
+
+function val(settled) { return settled.status === 'fulfilled' ? settled.value : null; }
+
+function buildGraph(data) {
+  const elements = [];
+  const node = (id, label, parent, extra = {}) => elements.push({ data: { id, label, parent, ...extra } });
+  const edge = (source, target, label, extra = {}) => elements.push({ data: { source, target, label, ...extra } });
+
+  // ─── Organ clusters ───
+  node('mind', 'Mind v2 :3486', null, { type: 'organ', color: '#f59e0b', status: data.mind.health?.status || 'unknown' });
+  node('senses', 'Senses v2 :3487', null, { type: 'organ', color: '#3b82f6', status: data.senses.health?.status || 'unknown' });
+  node('memory', 'Memory v2 :3488', null, { type: 'organ', color: '#8b5cf6', status: data.memory.health?.status || 'unknown' });
+
+  // ─── Mind use cases ───
+  node('mind-router', 'route_input\nT1/T2/T3', 'mind', { type: 'usecase' });
+  node('mind-process', 'process_message\nLLM reasoning', 'mind', { type: 'usecase' });
+  node('mind-supervise', 'supervise_services\nwatchdog 60s', 'mind', { type: 'usecase' });
+  node('mind-plans', 'evaluate_plans\nwave sort', 'mind', { type: 'usecase' });
+  node('mind-escalate', 'escalate\nMr. V / PM', 'mind', { type: 'usecase' });
+  node('mind-execute', 'execute_decision\ndispatch', 'mind', { type: 'usecase' });
+
+  // Mind internal flow
+  edge('mind-router', 'mind-process', 'T2', { type: 'internal' });
+  edge('mind-router', 'mind-escalate', 'T3', { type: 'internal' });
+  edge('mind-process', 'mind-execute', '', { type: 'internal' });
+  edge('mind-supervise', 'mind-execute', 'restart\nescalate', { type: 'internal' });
+  edge('mind-plans', 'mind-execute', 'tasks', { type: 'internal' });
+  edge('mind-escalate', 'mind-execute', '', { type: 'internal' });
+
+  // ─── Senses use cases ───
+  node('senses-receive', 'receive_signal\nparse raw input', 'senses', { type: 'usecase' });
+  node('senses-emit', 'emit_to_mind\nHTTP POST', 'senses', { type: 'usecase' });
+  node('senses-diagnose', 'diagnose_service\nWHY is it down?', 'senses', { type: 'usecase' });
+  node('senses-outcome', 'observe_outcome\n30s feedback', 'senses', { type: 'usecase' });
+
+  edge('senses-receive', 'senses-emit', '', { type: 'internal' });
+  edge('senses-diagnose', 'senses-outcome', '', { type: 'internal' });
+
+  // ─── Memory use cases ───
+  node('mem-store', 'store_memory\nembed + SQLite', 'memory', { type: 'usecase' });
+  node('mem-recall', 'recall_memory\nsemantic search', 'memory', { type: 'usecase' });
+  node('mem-strategy', 'manage_strategies\nreinforce/weaken', 'memory', { type: 'usecase' });
+  node('mem-cognitive', 'cognitive_state\nreflection/attention', 'memory', { type: 'usecase' });
+
+  edge('mem-store', 'mem-recall', 'vectors', { type: 'internal' });
+  edge('mem-strategy', 'mem-recall', 'pattern\nmatch', { type: 'internal' });
+
+  // ─── Cross-organ edges ───
+  edge('senses-emit', 'mind-router', 'Input', { type: 'cross', color: '#3b82f6' });
+  edge('mind-execute', 'senses-outcome', 'POST /observe', { type: 'cross', color: '#f59e0b' });
+  edge('senses-outcome', 'mind-router', 'outcome\nInput', { type: 'cross', color: '#10b981' });
+  edge('mind-execute', 'mem-store', 'log decision', { type: 'cross', color: '#8b5cf6' });
+  edge('mem-recall', 'mind-process', 'context', { type: 'cross', color: '#8b5cf6' });
+  edge('mem-strategy', 'mind-supervise', 'best\nstrategy', { type: 'cross', color: '#8b5cf6' });
+
+  // ─── Monitored services (from mind status) ───
+  if (data.mind.status?.services) {
+    node('services', 'Monitored Services', null, { type: 'external-group' });
+    for (const svc of data.mind.status.services) {
+      const svcStatus = svc.status === 'healthy' ? 'up' : svc.status === 'dead' ? 'down' : 'degraded';
+      node(`svc-${svc.name}`, `${svc.name} :${svc.port}\n${svc.status}`, 'services', { type: 'service', serviceStatus: svcStatus });
+    }
+    edge('mind-supervise', 'services', 'health check\n60s', { type: 'cross', color: '#6b7280' });
+    edge('senses-diagnose', 'services', 'diagnose', { type: 'cross', color: '#3b82f6' });
+  }
+
+  // ─── External: Ollama ───
+  node('ollama', 'Ollama :11434\nLLM + Embeddings', null, { type: 'external' });
+  edge('mind-process', 'ollama', 'T2 chat', { type: 'cross', color: '#6b7280' });
+  edge('mem-store', 'ollama', 'embed', { type: 'cross', color: '#6b7280' });
+
+  // ─── External: WhatsApp ───
+  node('whatsapp-ext', 'WhatsApp\nGateway :3478', null, { type: 'external' });
+  edge('whatsapp-ext', 'senses-receive', 'poll\n5s', { type: 'cross', color: '#6b7280' });
+
+  // ─── PM ───
+  node('pm', 'PM Vishal', null, { type: 'pm' });
+  edge('pm', 'whatsapp-ext', 'messages', { type: 'cross', color: '#ef4444' });
+  edge('mind-escalate', 'pm', 'alerts', { type: 'cross', color: '#ef4444' });
+
+  // ─── Constitution v2 ───
+  node('constitution', 'Constitution v2.0', null, { type: 'organ', color: '#ef4444' });
+  node('const-authority', '4-Layer Authority\nPM → Mr. V →\nMinisters → Sherpas', 'constitution', { type: 'usecase' });
+  node('const-protocols', 'Protocols (4 active)\nP-00 Delegation\nP-02 LLM Routing\nP-09 Autonomy\nP-12 Continuity', 'constitution', { type: 'usecase' });
+  node('const-rules', 'Rules\nTDD · Clean Arch\nNo Axios · Verify\nMemory Railguard', 'constitution', { type: 'usecase' });
+  node('const-interfaces', 'Interface Contracts\nsenses→mind\nmind→memory\nmind↔senses', 'constitution', { type: 'usecase' });
+
+  // Constitution governs all three organs
+  edge('const-authority', 'mind', 'governs', { type: 'cross', color: '#ef4444' });
+  edge('const-authority', 'senses', 'governs', { type: 'cross', color: '#ef4444' });
+  edge('const-authority', 'memory', 'governs', { type: 'cross', color: '#ef4444' });
+  edge('const-interfaces', 'mind-router', 'defines\nInput contract', { type: 'cross', color: '#ef4444' });
+  edge('pm', 'const-authority', 'supreme\nauthority', { type: 'cross', color: '#ef4444' });
+
+  // ─── Langflow on Pi ───
+  node('langflow', 'Langflow :7860\n(Pi) LLM Flow Editor\n4 protocol flows', null, { type: 'external' });
+  edge('const-protocols', 'langflow', 'visualized as\nLangflow flows', { type: 'cross', color: '#8b5cf6' });
+  edge('mind-process', 'langflow', 'T2 reasoning\n(future)', { type: 'cross', color: '#f59e0b' });
+
+  return elements;
+}
+
+// ─── Cytoscape init ───
+
+const cy = cytoscape({
+  container: document.getElementById('cy'),
+  elements: [],
+  style: [
+    // Organ clusters
+    { selector: 'node[type="organ"]', style: {
+      'shape': 'round-rectangle', 'background-color': 'data(color)', 'background-opacity': 0.12,
+      'border-width': 2, 'border-color': 'data(color)', 'border-opacity': 0.6,
+      'label': 'data(label)', 'text-valign': 'top', 'text-halign': 'center',
+      'font-size': 13, 'font-weight': 600, 'color': '#fff', 'text-margin-y': -8,
+      'padding': 30, 'compound-sizing-wrt-labels': 'include',
+    }},
+    // Use cases
+    { selector: 'node[type="usecase"]', style: {
+      'shape': 'round-rectangle', 'background-color': '#1e1e2e', 'border-width': 1.5, 'border-color': '#444',
+      'label': 'data(label)', 'text-valign': 'center', 'text-halign': 'center', 'text-wrap': 'wrap',
+      'font-size': 9, 'color': '#ddd', 'width': 130, 'height': 50,
+    }},
+    // Services
+    { selector: 'node[type="service"][serviceStatus="up"]', style: {
+      'shape': 'round-rectangle', 'background-color': '#052e16', 'border-color': '#10b981', 'border-width': 2,
+      'label': 'data(label)', 'text-wrap': 'wrap', 'font-size': 8, 'color': '#10b981', 'width': 100, 'height': 40,
+    }},
+    { selector: 'node[type="service"][serviceStatus="down"]', style: {
+      'shape': 'round-rectangle', 'background-color': '#2d0a0a', 'border-color': '#ef4444', 'border-width': 2,
+      'label': 'data(label)', 'text-wrap': 'wrap', 'font-size': 8, 'color': '#ef4444', 'width': 100, 'height': 40,
+    }},
+    { selector: 'node[type="service"][serviceStatus="degraded"]', style: {
+      'background-color': '#2d1f0a', 'border-color': '#f59e0b', 'border-width': 2,
+      'label': 'data(label)', 'text-wrap': 'wrap', 'font-size': 8, 'color': '#f59e0b', 'width': 100, 'height': 40,
+    }},
+    // External group
+    { selector: 'node[type="external-group"]', style: {
+      'background-color': '#111118', 'background-opacity': 0.5, 'border-width': 1, 'border-color': '#333', 'border-style': 'dashed',
+      'label': 'data(label)', 'text-valign': 'top', 'font-size': 10, 'color': '#666', 'padding': 20,
+    }},
+    // External nodes
+    { selector: 'node[type="external"]', style: {
+      'shape': 'diamond', 'background-color': '#1a1a2e', 'border-color': '#6b7280', 'border-width': 1.5,
+      'label': 'data(label)', 'text-wrap': 'wrap', 'font-size': 9, 'color': '#999', 'width': 100, 'height': 50,
+    }},
+    // PM
+    { selector: 'node[type="pm"]', style: {
+      'shape': 'ellipse', 'background-color': '#7f1d1d', 'border-color': '#ef4444', 'border-width': 2,
+      'label': 'data(label)', 'font-size': 11, 'font-weight': 700, 'color': '#fff', 'width': 90, 'height': 50,
+    }},
+    // Internal edges
+    { selector: 'edge[type="internal"]', style: {
+      'width': 1.5, 'line-color': '#444', 'target-arrow-color': '#444', 'target-arrow-shape': 'triangle',
+      'curve-style': 'bezier', 'label': 'data(label)', 'font-size': 7, 'color': '#666',
+      'text-rotation': 'autorotate', 'text-margin-y': -8,
+    }},
+    // Cross-organ edges
+    { selector: 'edge[type="cross"]', style: {
+      'width': 2, 'line-color': 'data(color)', 'target-arrow-color': 'data(color)', 'target-arrow-shape': 'triangle',
+      'curve-style': 'bezier', 'line-style': 'dashed', 'label': 'data(label)', 'font-size': 7,
+      'color': '#888', 'text-rotation': 'autorotate', 'text-margin-y': -8, 'arrow-scale': 1.2,
+    }},
+  ],
+});
+
+// ─── Click handler: show detail panel ───
+cy.on('tap', 'node', function(evt) {
+  const node = evt.target;
+  const panel = document.getElementById('detail-panel');
+  const title = document.getElementById('panel-title');
+  const body = document.getElementById('panel-body');
+
+  title.textContent = node.data('label') || node.id();
+  const rows = Object.entries(node.data())
+    .filter(([k]) => !['id', 'label', 'parent'].includes(k))
+    .map(([k, v]) => `<div class="row"><span class="label">${k}</span><span class="value">${v}</span></div>`)
+    .join('');
+  body.innerHTML = rows || '<div class="row"><span class="label">No metadata</span></div>';
+  panel.classList.add('visible');
+});
+
+cy.on('tap', function(evt) {
+  if (evt.target === cy) document.getElementById('detail-panel').classList.remove('visible');
+});
+
+// ─── Layout ───
+function runLayout() {
+  cy.layout({
+    name: 'dagre',
+    rankDir: 'TB',
+    nodeSep: 40,
+    rankSep: 60,
+    padding: 30,
+    spacingFactor: 1.1,
+    animate: true,
+    animationDuration: 500,
+  }).run();
+}
+
+function toggleLabels(btn) {
+  labelsVisible = !labelsVisible;
+  btn.classList.toggle('active');
+  cy.edges().style('label', labelsVisible ? 'data(label)' : '');
+}
+
+// ─── Refresh ───
+async function refresh() {
+  try {
+    const data = await fetchSystemData();
+    const elements = buildGraph(data);
+    cy.elements().remove();
+    cy.add(elements);
+    runLayout();
+
+    // Update stats
+    const mind = data.mind.status;
+    const mem = data.memory.stats;
+    const stats = [];
+    if (mind) {
+      const up = mind.services?.filter(s => s.status === 'healthy').length || 0;
+      const total = mind.services?.length || 0;
+      stats.push(`services: ${up}/${total} up`);
+      stats.push(`loop: ${mind.loopCount}`);
+      stats.push(`uptime: ${mind.uptimeMinutes}m`);
+    }
+    if (mem) {
+      stats.push(`vectors: ${(mem.vectorCounts?.decisions || 0) + (mem.vectorCounts?.strategies || 0)}`);
+    }
+    document.getElementById('stats').textContent = stats.join('  |  ');
+  } catch (err) {
+    document.getElementById('stats').textContent = 'refresh failed: ' + err.message;
+  }
+}
+
+// ─── Auto-refresh every 30s ───
+refresh();
+setInterval(refresh, 30000);
+
+// ════════════════════════════════════════════════════
+// EDIT MODE
+// ════════════════════════════════════════════════════
+
+let editMode = false;
+let selectedElement = null;
+
+function toggleEdit(btn) {
+  editMode = !editMode;
+  btn.classList.toggle('active');
+  document.getElementById('edit-panel').classList.toggle('visible');
+  if (editMode) {
+    cy.autoungrabify(false);
+    cy.userPanningEnabled(true);
+  }
+}
+
+function addNode() {
+  const id = document.getElementById('new-node-id').value.trim();
+  const label = document.getElementById('new-node-label').value.replace(/\\n/g, '\n');
+  const parent = document.getElementById('new-node-parent').value || undefined;
+  const type = document.getElementById('new-node-type').value;
+  if (!id || !label) return alert('ID and Label are required');
+
+  const colors = { mind: '#f59e0b', senses: '#3b82f6', memory: '#8b5cf6' };
+  cy.add({
+    data: { id, label, parent, type, color: colors[parent] || '#6b7280', serviceStatus: 'up' }
+  });
+  runLayout();
+  document.getElementById('new-node-id').value = '';
+  document.getElementById('new-node-label').value = '';
+}
+
+function addEdge() {
+  const from = document.getElementById('new-edge-from').value.trim();
+  const to = document.getElementById('new-edge-to').value.trim();
+  const label = document.getElementById('new-edge-label').value.trim();
+  if (!from || !to) return alert('From and To are required');
+  if (!cy.getElementById(from).length) return alert(`Node "${from}" not found`);
+  if (!cy.getElementById(to).length) return alert(`Node "${to}" not found`);
+
+  cy.add({
+    data: { source: from, target: to, label, type: 'cross', color: '#10b981' }
+  });
+  runLayout();
+  document.getElementById('new-edge-from').value = '';
+  document.getElementById('new-edge-to').value = '';
+  document.getElementById('new-edge-label').value = '';
+}
+
+// Select + Delete
+cy.on('tap', 'node, edge', function(evt) {
+  if (!editMode) return;
+  if (selectedElement) selectedElement.unselect();
+  selectedElement = evt.target;
+  selectedElement.select();
+  const info = document.getElementById('selected-info');
+  info.textContent = `Selected: ${selectedElement.isNode() ? 'Node' : 'Edge'} "${selectedElement.data('label') || selectedElement.id()}" — press Delete to remove`;
+});
+
+document.addEventListener('keydown', function(e) {
+  if (!editMode || !selectedElement) return;
+  if (e.key === 'Delete' || e.key === 'Backspace') {
+    e.preventDefault();
+    if (confirm(`Delete "${selectedElement.data('label') || selectedElement.id()}"?`)) {
+      cy.remove(selectedElement);
+      selectedElement = null;
+      document.getElementById('selected-info').textContent = 'Deleted. Click another element or add new.';
+    }
+  }
+});
+
+// Export / Import
+function exportGraph() {
+  const json = cy.json();
+  const blob = new Blob([JSON.stringify(json, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `raj-sadan-v2-graph-${new Date().toISOString().slice(0, 10)}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function importGraph(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    try {
+      const json = JSON.parse(e.target.result);
+      cy.json(json);
+      cy.fit(50);
+    } catch (err) {
+      alert('Invalid JSON: ' + err.message);
+    }
+  };
+  reader.readAsText(file);
+  event.target.value = '';
+}
+</script>
+</body></html>
