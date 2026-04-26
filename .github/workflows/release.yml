@@ -1,0 +1,54 @@
+name: Release
+
+# Triggers on a vX.Y.Z tag push. Builds the package, runs the full test
+# matrix one more time, then publishes a GitHub Release with notes drawn
+# from the matching CHANGELOG section.
+#
+# npm publish is intentionally NOT wired here — until the npm name is
+# confirmed (`ai-mind` may be taken, fallback `@vraj0703/ai-mind`), we
+# publish manually. Add the `npm publish` step once the name is decided.
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: npm
+
+      - run: npm ci
+      - run: npm test
+      - run: npm run test:smoke
+
+      - name: Extract changelog section
+        id: changelog
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          # Awk: print lines between this version's heading and the next
+          NOTES=$(awk "/^## \[$VERSION\]/{flag=1; next} /^## \[/{flag=0} flag" CHANGELOG.md)
+          {
+            echo "notes<<EOF"
+            echo "$NOTES"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body: ${{ steps.changelog.outputs.notes }}
+          draft: false
+          prerelease: false

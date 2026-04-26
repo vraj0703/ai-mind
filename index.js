@@ -1,13 +1,16 @@
 /**
- * Raj Sadan Mind v2 — Entry Point
+ * ai-mind — Entry Point
  *
  * Clean architecture: domain (pure logic) → data (I/O) → presentation (HTTP).
- * DI container binds interfaces to implementations.
+ * DI container binds interfaces to implementations (mock by default — see
+ * EXTRACTION_STRATEGY.md and CONTRACTS.md).
  *
- * Start:  node v2/mind/index.js
- * Test:   node --test v2/mind/domain/use_cases/*.test.js
- * Health: curl http://127.0.0.1:3486/health
- * Chat:   curl -X POST http://127.0.0.1:3486/chat -H "Content-Type: application/json" -d '{"source":"cli","sender":"pm","payload":"/status"}'
+ * Start:           node index.js                  (all mocks, zero deps)
+ * Start with reals: MIND_USE_REAL=all node index.js
+ * Selective:        MIND_USE_REAL=llm,plan node index.js
+ * Test:            npm test
+ * Health:          curl http://127.0.0.1:3486/health
+ * Chat:            curl -X POST http://127.0.0.1:3486/chat -H "Content-Type: application/json" -d '{"source":"cli","sender":"pm","payload":"/status"}'
  */
 
 const path = require("path");
@@ -16,22 +19,23 @@ const { SupervisorController } = require("./presentation/state_management/contro
 const { RouterController } = require("./presentation/state_management/controllers/router_controller");
 const { createServer } = require("./presentation/pages/server");
 
-const PROJECT_ROOT = path.resolve(__dirname, "..");
+const PROJECT_ROOT = process.env.MIND_PROJECT_ROOT || path.resolve(__dirname, "..");
 const PORT = parseInt(process.env.MIND_PORT) || 3486;
 
-// ─── v2 organs to monitor (post-decommission, all at root) ───
-// Mind is the supervisor; it does NOT monitor itself (3486).
-const SERVICES = [
+// ─── Peer services to monitor (raj-sadan organ topology) ───
+// Empty by default (supervisor-of-self mode). Populated via env when peers
+// are present. raj-sadan boot sets MIND_PEER_SERVICES to enable monitoring.
+const SERVICES = process.env.MIND_PEER_SERVICES === "raj-sadan-organs" ? [
   { name: "memory",    port: 3488, health_url: "http://127.0.0.1:3488/health" },
   { name: "senses",    port: 3487, health_url: "http://127.0.0.1:3487/health" },
   { name: "knowledge", port: 3489, health_url: "http://127.0.0.1:3489/health" },
   { name: "dashboard", port: 3491, health_url: "http://127.0.0.1:3491/health" },
-];
+] : [];
 
 async function main() {
   console.log("╔══════════════════════════════════════╗");
-  console.log("║     Raj Sadan Mind v2                ║");
-  console.log("║     Clean Architecture · 91 Tests    ║");
+  console.log("║     ai-mind                          ║");
+  console.log("║     Cognitive layer · clean arch     ║");
   console.log("╚══════════════════════════════════════╝");
   console.log();
 
@@ -41,6 +45,12 @@ async function main() {
     port: PORT,
     services: SERVICES,
   });
+
+  console.log(`[ai-mind] bindings — real: [${container.config.realBindings.join(", ") || "none"}]`);
+  console.log(`[ai-mind] bindings — mock: [${container.config.mockBindings.join(", ")}]`);
+  if (SERVICES.length === 0) {
+    console.log(`[ai-mind] supervisor-of-self mode (no peer services)`);
+  }
 
   // ─── Step 2: Create controllers ───
   const supervisor = new SupervisorController(container);

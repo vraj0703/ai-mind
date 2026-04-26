@@ -1,40 +1,85 @@
 /**
  * DI Container — binds domain interfaces to data-layer implementations.
  *
- * This is the ONLY place that knows about concrete classes.
- * Everything else works with interfaces.
+ * Mockability contract (see EXTRACTION_STRATEGY.md):
+ *   - Every binding defaults to its in-tree mock from data/repositories/mocks.
+ *   - Pass `use: { <binding>: 'real' | 'mock' }` to flip per-binding.
+ *   - Pass `use: { <binding>: <instance> }` to inject directly.
+ *   - Or set env `MIND_USE_REAL=binding1,binding2` (or `=all`) to flip via env.
+ *
+ * The 8 bindings:
+ *   llm, llmClient, jobScheduler, serviceMonitor, planStore,
+ *   stateWriter, alertChannel, contextProvider
  */
 
 const path = require("path");
 const { Service } = require("../domain/entities/service");
 
-// Data layer implementations
+// Real implementations (data layer)
 const { OllamaLLMRepository } = require("../data/repositories/ollama_llm_repository");
-const { HTTPServiceMonitor } = require("../data/repositories/http_service_monitor");
-const { TOMLPlanStore } = require("../data/repositories/toml_plan_store");
-const { FileStateWriter } = require("../data/repositories/file_state_writer");
+const { HTTPServiceMonitor }  = require("../data/repositories/http_service_monitor");
+const { TOMLPlanStore }       = require("../data/repositories/toml_plan_store");
+const { FileStateWriter }     = require("../data/repositories/file_state_writer");
 const { WhatsAppAlertChannel } = require("../data/repositories/whatsapp_alert_channel");
-const { ContextAssembler } = require("../data/repositories/context_assembler");
-const { OllamaLLMClient } = require("../data/data_sources/remote/ollama_llm_client");
-const { HttpJobScheduler } = require("../data/data_sources/remote/http_job_scheduler");
+const { ContextAssembler }    = require("../data/repositories/context_assembler");
+const { OllamaLLMClient }     = require("../data/data_sources/remote/ollama_llm_client");
+const { HttpJobScheduler }    = require("../data/data_sources/remote/http_job_scheduler");
 const { OLLAMA_DEFAULT_MODEL, CRON_HOST } = require("../domain/constants");
 
+// Default mocks (in-tree)
+const Mocks = require("../data/repositories/mocks");
+
+const ALL_BINDINGS = [
+  "llm", "llmClient", "jobScheduler", "serviceMonitor",
+  "planStore", "stateWriter", "alertChannel", "contextProvider",
+];
+
 /**
- * Create a fully wired container from a config object.
+ * Decide which bindings should be REAL based on env + config.
+ * Config wins over env. Returns a Set of binding names.
+ */
+function resolveRealBindings(useConfig = {}) {
+  const real = new Set();
+
+  // Env layer
+  const envFlag = (process.env.MIND_USE_REAL || "").trim();
+  if (envFlag === "all") {
+    ALL_BINDINGS.forEach(b => real.add(b));
+  } else if (envFlag) {
+    envFlag.split(",").map(s => s.trim()).filter(Boolean).forEach(b => real.add(b));
+  }
+
+  // Config layer (wins over env)
+  for (const [binding, choice] of Object.entries(useConfig)) {
+    if (choice === "real" || (choice && typeof choice === "object")) {
+      real.add(binding);
+    } else if (choice === "mock") {
+      real.delete(binding);
+    }
+  }
+
+  return real;
+}
+
+/**
+ * Create a fully wired container.
  *
- * @param {object} config
- * @param {string} config.projectRoot  - absolute path to raj_sadan root
- * @param {string} [config.ollamaHost]
- * @param {string} [config.whatsappHost]
- * @param {number} [config.port]       - mind HTTP port
- * @param {object[]} [config.services] - service definitions from cortex config
- * @returns {object} - all repositories + service list + config
+ * @param {object} [config]
+ * @param {string} [config.projectRoot]   - filesystem root for real impls; defaults to os.tmpdir()
+ * @param {string} [config.ollamaHost]    - LLM host
+ * @param {string} [config.whatsappHost]  - alert channel host
+ * @param {string} [config.cronHost]      - job scheduler host
+ * @param {number} [config.port]          - mind HTTP port
+ * @param {object[]} [config.services]    - peer services to monitor (empty → supervisor-of-self mode)
+ * @param {object} [config.use]           - per-binding 'real' | 'mock' | <instance>
+ * @returns {object} container
  */
 function createContainer(config = {}) {
-  const projectRoot = config.projectRoot || process.cwd();
-  const port = config.port || 3485;
+  const projectRoot = config.projectRoot || require("os").tmpdir();
+  const port = config.port || 3486;
+  const useConfig = config.use || {};
+  const real = resolveRealBindings(useConfig);
 
-  // Build service list from config
   const serviceList = (config.services || []).map(s => new Service({
     name: s.name,
     port: s.port,
@@ -43,40 +88,54 @@ function createContainer(config = {}) {
     status: "unknown",
   }));
 
-  // Instantiate repositories
-  // OLLAMA_HOST env is the BIND address (0.0.0.0) — not valid for client calls
+  // Per-binding factory: returns the chosen instance for `name`.
+  // Order: explicit instance in useConfig > real (per real Set) > mock
+  function bind(name, mockFactory, realFactory) {
+    const choice = useConfig[name];
+    if (choice && typeof choice === "object") return choice; // injected instance
+    if (real.has(name)) return realFactory();
+    return mockFactory();
+  }
+
+  // Resolve hosts (used only by real impls)
   const envOllama = process.env.OLLAMA_HOST;
   const ollamaHost = config.ollamaHost
     || (envOllama && !envOllama.includes("0.0.0.0") ? envOllama : null)
     || "http://localhost:11434";
-  const llm = new OllamaLLMRepository({ host: ollamaHost });
+  const whatsappHost = config.whatsappHost || "http://127.0.0.1:3478";
+  const cronHost = config.cronHost || CRON_HOST;
 
-  const serviceMonitor = new HTTPServiceMonitor({ projectRoot });
+  const llm = bind("llm",
+    () => new Mocks.StubLLMProvider(),
+    () => new OllamaLLMRepository({ host: ollamaHost }));
 
-  const planStore = new TOMLPlanStore({
-    plansDir: path.join(projectRoot, "plans"),
-  });
+  const llmClient = bind("llmClient",
+    () => new Mocks.StubLLMClient(),
+    () => new OllamaLLMClient({ host: ollamaHost, defaultModel: OLLAMA_DEFAULT_MODEL }));
 
-  const stateWriter = new FileStateWriter({ projectRoot });
+  const jobScheduler = bind("jobScheduler",
+    () => new Mocks.InMemoryJobScheduler(),
+    () => new HttpJobScheduler({ host: cronHost }));
 
-  const alertChannel = new WhatsAppAlertChannel({
-    host: config.whatsappHost || "http://127.0.0.1:3478",
-  });
+  const serviceMonitor = bind("serviceMonitor",
+    () => new Mocks.NoopServiceMonitor(),
+    () => new HTTPServiceMonitor({ projectRoot }));
 
-  const contextProvider = new ContextAssembler({
-    planStore,
-    serviceMonitor,
-    serviceList,
-  });
+  const planStore = bind("planStore",
+    () => new Mocks.InMemoryPlanStore(),
+    () => new TOMLPlanStore({ plansDir: path.join(projectRoot, "plans") }));
 
-  // Gateway clients ported from v1 (Ollama LLM, cron service)
-  const llmClient = new OllamaLLMClient({
-    host: ollamaHost,
-    defaultModel: OLLAMA_DEFAULT_MODEL,
-  });
-  const jobScheduler = new HttpJobScheduler({
-    host: config.cronHost || CRON_HOST,
-  });
+  const stateWriter = bind("stateWriter",
+    () => new Mocks.InMemoryStateWriter(),
+    () => new FileStateWriter({ projectRoot }));
+
+  const alertChannel = bind("alertChannel",
+    () => new Mocks.ConsoleAlertChannel(),
+    () => new WhatsAppAlertChannel({ host: whatsappHost }));
+
+  const contextProvider = bind("contextProvider",
+    () => new Mocks.StaticContextProvider({ services: serviceList }),
+    () => new ContextAssembler({ planStore, serviceMonitor, serviceList }));
 
   return {
     // Repositories (interface implementations)
@@ -92,12 +151,14 @@ function createContainer(config = {}) {
     // Raw data
     serviceList,
 
-    // Config
+    // Config (echoed for diagnostic / test introspection)
     config: {
       projectRoot,
       port,
+      realBindings: [...real],
+      mockBindings: ALL_BINDINGS.filter(b => !real.has(b)),
     },
   };
 }
 
-module.exports = { createContainer };
+module.exports = { createContainer, ALL_BINDINGS };

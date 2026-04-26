@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [22.x, 24.x]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+
+      - run: npm ci
+      - run: npm test
+
+      # Mockability contract: zero-submodule install must work end-to-end.
+      # Even if `npm test` is fine, this catches regressions that break the
+      # default-mock wiring without breaking domain use cases.
+      - name: Zero-submodule smoke
+        run: npm run test:smoke

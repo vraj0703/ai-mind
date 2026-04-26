@@ -1,18 +1,39 @@
 {
-  "name": "raj-sadan-mind",
-  "version": "2.0.0",
-  "private": true,
-  "description": "Raj Sadan Mind — cognitive layer (router, reasoner, supervisor, executor)",
+  "name": "ai-mind",
+  "version": "0.1.0",
+  "description": "Cognitive layer for AI agents — router, reasoner, supervisor, executor. Works standalone with built-in mocks; opts into real services when you have them.",
   "main": "index.js",
+  "bin": {
+    "ai-mind": "bin/ai-mind.js"
+  },
   "scripts": {
     "start": "node index.js",
-    "test": "node --test domain/use_cases/*.test.js",
-    "test:all": "node --test domain/use_cases/*.test.js data/repositories/*.test.js"
+    "test": "node --test domain/use_cases/*.test.js tests/*.test.js",
+    "test:all": "node --test domain/use_cases/*.test.js data/repositories/*.test.js tests/*.test.js",
+    "test:smoke": "node --test tests/zero_submodule_smoke.test.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "keywords": [
+    "ai-agent",
+    "mcp",
+    "cognitive-architecture",
+    "clean-architecture",
+    "mcp-server",
+    "llm"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vraj0703/ai-mind.git"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "cytoscape": "^3.33.2",
     "cytoscape-dagre": "^2.5.0",
     "express": "^5.1.0",
-    "smol-toml": "^1.3.1"
+    "smol-toml": "^1.3.1",
+    "zod": "^4.0.0"
   }
 }

@@ -1,0 +1,160 @@
+# mind/AUDIT.toml — External coupling inventory
+# Owner: Mr. V (Principal Secretary)
+# Authored: 2026-04-26 for RAJ-17
+# Purpose: Inventory every coupling between mind/ and the outside, classify each
+#   so RAJ-41 (mockable interfaces) can decide what gets a default mock and what
+#   stays an opt-in submodule.
+
+[meta]
+linear_issue        = "RAJ-17"
+mind_version        = "2.0.0"
+audit_method        = "ripgrep + manual classification by Mr. V"
+key_finding         = "mind has ZERO source-code imports outside mind/. All external coupling is HTTP, filesystem, and env-var based, already abstracted behind data/repositories/ interfaces. Extraction is straightforward."
+
+# ─────────────────────────────────────────
+# SECTION 1: External JS imports
+# ─────────────────────────────────────────
+# Searched: require\(['"](\.\./|/raj_sadan)... across mind/**/*.js
+# Result: NONE. Every relative require is internal to mind/.
+
+[external_imports]
+count               = 0
+note                = "Every require() inside mind/ resolves to a path within mind/. No import reaches into raj-sadan, lib/, services/, or any sibling organ. Architectural cleanliness is the precondition that makes the rest of this extraction cheap."
+
+# ─────────────────────────────────────────
+# SECTION 2: External configuration files mind reads at runtime
+# ─────────────────────────────────────────
+
+[[external_configs]]
+purpose             = "Plan TOML files (used by TOMLPlanStore for plan/task tracking)"
+location            = "Path passed in at construction; PROJECT_ROOT/<...>/plans/*.toml in the raj-sadan deployment"
+reader              = "data/repositories/toml_plan_store.js (fs.readFileSync)"
+classification      = "MOCKABLE"
+mock_strategy       = "InMemoryPlanStore — empty plan list by default, accepts seed data via constructor"
+real_strategy       = "Existing TOMLPlanStore reading from a configurable directory"
+
+[[external_configs]]
+purpose             = "State TOML/JSONL files (FileStateWriter persists supervisor state, decision logs)"
+location            = "Path passed at construction; PROJECT_ROOT/<...>/state/* in raj-sadan"
+reader              = "data/repositories/file_state_writer.js (fs.writeFileSync, fs.appendFileSync)"
+classification      = "MOCKABLE"
+mock_strategy       = "InMemoryStateWriter — append to array, expose getEntries() for tests"
+real_strategy       = "Existing FileStateWriter targeting a configurable directory"
+
+[[external_configs]]
+purpose             = "Focus brief config (read by generate_focus_brief.js for priority weights)"
+location            = "configPath param passed by caller; default unset"
+reader              = "domain/use_cases/generate_focus_brief.js (fs.readFileSync)"
+classification      = "MOCKABLE"
+mock_strategy       = "Sensible default weights bundled in domain/constants — no file read needed if config absent"
+real_strategy       = "Pass configPath at use-case invocation"
+
+# ─────────────────────────────────────────
+# SECTION 3: External HTTP services mind calls at runtime
+# ─────────────────────────────────────────
+
+[[external_services]]
+name                = "Ollama (LLM provider)"
+default_url         = "http://localhost:11434"
+env_override        = "OLLAMA_HOST"
+declared_in         = "domain/constants/index.js, data/repositories/ollama_llm_repository.js, data/data_sources/remote/ollama_llm_client.js"
+endpoints_used      = ["GET /api/tags (model list, health probe)", "POST /api/generate (inference)"]
+classification      = "MOCKABLE"
+mock_strategy       = "StubLLMProvider — returns deterministic canned responses keyed by prompt prefix; supports tier-1 command parsing without any real model"
+real_strategy       = "OllamaLLMRepository pointing at any Ollama-compatible endpoint"
+notes               = "This is the heaviest coupling. Mock must be smart enough to pass the conversational tests but cheap enough to not require a real model. Consider pattern-matching against known prompts."
+
+[[external_services]]
+name                = "Cron (job scheduler)"
+default_url         = "http://127.0.0.1:3479"
+env_override        = "(none — uses CRON_HOST constant)"
+declared_in         = "domain/constants/index.js, data/data_sources/remote/http_job_scheduler.js"
+endpoints_used      = ["POST <path> (schedule job)", "DELETE <path> (cancel)"]
+classification      = "MOCKABLE"
+mock_strategy       = "InMemoryJobScheduler — store {id, schedule, payload} in a Map, expose listScheduled() for tests; no actual time-based firing"
+real_strategy       = "HttpJobScheduler hitting a real cron service"
+
+[[external_services]]
+name                = "WhatsApp (alert channel)"
+default_url         = "http://127.0.0.1:3478"
+env_override        = "(none — accepts opts.host)"
+declared_in         = "data/repositories/whatsapp_alert_channel.js"
+endpoints_used      = ["POST /send (DM)", "POST /send-group (group)"]
+classification      = "MOCKABLE"
+mock_strategy       = "ConsoleAlertChannel — console.log alerts with a structured prefix; tests can capture output"
+real_strategy       = "WhatsAppAlertChannel for real notification delivery"
+
+[[external_services]]
+name                = "Senses (observe endpoint)"
+default_url         = "http://127.0.0.1:3487/observe"
+env_override        = "(none — set via _sensesObserveUrl on controller)"
+declared_in         = "presentation/state_management/controllers/supervisor_controller.js"
+endpoints_used      = ["POST / (observation payload)"]
+classification      = "MOCKABLE"
+mock_strategy       = "NoopSensesPort — accept observations, drop them; expose lastObservation for tests"
+real_strategy       = "HTTPSensesPort posting to the real senses service"
+
+[[external_services]]
+name                = "Sibling organs (memory, senses, knowledge, dashboard health checks)"
+default_urls        = ["http://127.0.0.1:3488/health (memory)", "http://127.0.0.1:3487/health (senses)", "http://127.0.0.1:3489/health (knowledge)", "http://127.0.0.1:3491/health (dashboard)"]
+env_override        = "Whole SERVICES array passed in via index.js — caller-controlled"
+declared_in         = "index.js (SERVICES const), data/repositories/http_service_monitor.js"
+classification      = "OPTIONAL"
+mock_strategy       = "Pass an empty SERVICES array — supervisor has nothing to monitor; this is a valid configuration for an embedded use case (MCP server, CLI mode)"
+real_strategy       = "Existing index.js SERVICES array; users override per their topology"
+notes               = "Already cleanly factored — the entire monitoring surface is opt-in by passing a non-empty list."
+
+# ─────────────────────────────────────────
+# SECTION 4: Environment variables mind reads
+# ─────────────────────────────────────────
+
+[[env_vars]]
+name                = "MIND_PORT"
+purpose             = "HTTP server listen port"
+default             = 3486
+required            = false
+read_at             = "index.js startup"
+
+[[env_vars]]
+name                = "OLLAMA_HOST"
+purpose             = "Override default Ollama URL"
+default             = "http://localhost:11434"
+required            = false
+read_at             = "di/container.js, data/repositories/ollama_llm_repository.js"
+
+# ─────────────────────────────────────────
+# SECTION 5: Filesystem assumptions
+# ─────────────────────────────────────────
+
+[[filesystem_assumptions]]
+purpose             = "PROJECT_ROOT — used to resolve relative paths for plan/state files"
+where               = "index.js: const PROJECT_ROOT = path.resolve(__dirname, '..')"
+classification      = "MOCKABLE"
+mock_strategy       = "Default to os.tmpdir() when running standalone; accept projectRoot via createContainer({projectRoot}) for explicit override"
+real_strategy       = "Caller passes projectRoot explicitly (raj-sadan does this in its bootloader)"
+notes               = "The implicit `__dirname/..` assumes mind sits inside a parent project. After extraction, this assumption is wrong — must be parameterised."
+
+# ─────────────────────────────────────────
+# SECTION 6: Mockability summary
+# ─────────────────────────────────────────
+
+[mockability]
+total_couplings         = 9
+classified_essential    = 0
+classified_mockable     = 8
+classified_optional     = 1
+verdict                 = "Every external coupling has a viable mock. mind can ship with built-in defaults that produce meaningful behavior for tier-1 (instant commands) and tier-2 (conversational) operations, even when no Ollama / cron / WhatsApp / senses are present. Tier-3 (executive) operations would need a real LLM but degrade gracefully to escalate-only mode."
+
+[mockability.zero_submodule_promise]
+description     = "After RAJ-41 lands, this should hold: fresh git clone → npm install → npm start → POST /chat with a tier-1 command → get a real response. No external services, no submodules, no Ollama running."
+test_command    = "curl -X POST http://127.0.0.1:3486/chat -H 'Content-Type: application/json' -d '{\"source\":\"cli\",\"sender\":\"pm\",\"payload\":\"/status\"}'"
+expected        = "JSON response with a status summary, served from in-memory mocks"
+
+# ─────────────────────────────────────────
+# SECTION 7: What this audit unblocks
+# ─────────────────────────────────────────
+
+[next_steps]
+RAJ-18  = "Strategy doc can now reference this audit for the mockability framework. Submodule decision is recorded; this audit proves the swap mechanism is feasible."
+RAJ-41  = "Has the input list (8 mockable + 1 optional couplings). Each one needs an interface in mind/contracts/ and a default mock in mind/contracts/mocks/."
+RAJ-20  = "Extraction is mechanically simple — there's nothing to untangle. After RAJ-41, the move is just (a) parameterise PROJECT_ROOT, (b) set defaults in di/container.js to point at mocks, (c) lift mind/ to its own repo."
