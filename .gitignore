@@ -1,0 +1,35 @@
+# Node
+node_modules/
+package-lock.json
+*.log
+npm-debug.log*
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Process artifacts
+*.pid
+ai-mind.log
+
+# Test artifacts
+coverage/
+.nyc_output/
+
+# Build artifacts (ai-mind has no build step today, but reserve)
+dist/
+build/
+
+# Local audit history (committed audits live under audit/, gitignored ones live under audit/.local)
+audit/.local/

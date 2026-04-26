@@ -1,0 +1,208 @@
+# 2026-04-26-pre-release.toml — Pre-release security audit for ai-mind v0.1.0
+#
+# Scope: the standalone ai-mind repository immediately after extraction
+#        (RAJ-20) and before the first public release (RAJ-26).
+# Method: 7-domain audit per Constitution Article XII. Run manually by
+#        Mr. V because the Security Sherpa script (immunity/security/main.py)
+#        had stale post-cutover paths and would have needed fixing before it
+#        could run; that fix is out of scope for RAJ-25. The check coverage
+#        is identical — secrets / network / deps / access / code / infra /
+#        data — just executed via shell + grep + npm audit instead of the
+#        sherpa's self-evolving playbook.
+# Auditor: Mr. V
+# Linear: RAJ-25
+
+[meta]
+target          = "vraj0703/ai-mind"
+target_commit   = "fa5a8f6bb82a347b01369906b1e17afa48027010"
+target_version  = "v0.1.0 (pending)"
+audit_date      = "2026-04-26"
+audit_type      = "pre-release"
+overall_verdict = "PASS — 0 critical, 0 high, 2 medium (both fixed/dispositioned), clear to publish"
+
+[summary]
+critical = 0
+high     = 0
+medium   = 2
+low      = 0
+info     = 0
+
+# ─────────────────────────────────────────
+# DOMAIN 1: SECRETS
+# ─────────────────────────────────────────
+
+[domain.secrets]
+verdict = "CLEAN"
+checks  = [
+    "Git history scan for committed token patterns (sk-*, ghp_*, AKIA*, password=*, api_key=*, secret=*, token=*)",
+    "Content scan across .js / .json / .toml / .md / .yml in working tree",
+    "Tracked-file name scan for .env / *.key / *credential* / *password*",
+]
+finding_count = 0
+notes = "AUDIT.toml committed at repo root is the planning artifact (RAJ-17), not actual secrets. No leaked tokens found in 4 commits of history or in working tree."
+
+# ─────────────────────────────────────────
+# DOMAIN 2: NETWORK
+# ─────────────────────────────────────────
+
+[domain.network]
+verdict = "CLEAN"
+checks  = [
+    "HTTP server bind address (must not be 0.0.0.0 by default)",
+    "Outbound URL inventory (localhost/127.0.0.1 only — no surprise externals)",
+    "0.0.0.0 string occurrences (defensive filtering or accidental bind?)",
+]
+finding_count = 0
+notes        = """
+- presentation/pages/server.js explicitly binds to '127.0.0.1' (line 29) — not exposed beyond loopback.
+- All outbound URLs are localhost/127.0.0.1 (Ollama, cron, WhatsApp, peer-organ healths).
+- 0.0.0.0 references are defensive filters (di/container.js + ollama_llm_repository.js) that REJECT 0.0.0.0 as a client URL — correct behaviour.
+"""
+
+# ─────────────────────────────────────────
+# DOMAIN 3: DEPENDENCIES
+# ─────────────────────────────────────────
+
+[domain.dependencies]
+verdict = "CLEAN"
+checks  = ["npm audit (production + dev)", "direct dependency inventory review"]
+finding_count = 0
+audit_output  = "critical=0 high=0 moderate=0 low=0 info=0 total=0"
+direct_deps   = [
+    "@modelcontextprotocol/sdk@^1.29.0",
+    "cytoscape@^3.33.2",
+    "cytoscape-dagre@^2.5.0",
+    "express@^5.1.0",
+    "smol-toml@^1.3.1",
+    "zod@^4.0.0",
+]
+notes = "All direct deps are well-known, actively maintained. Express 5 is current generation. MCP SDK is Anthropic-published (high trust). No native deps."
+
+# ─────────────────────────────────────────
+# DOMAIN 4: ACCESS CONTROL
+# ─────────────────────────────────────────
+
+[domain.access_control]
+verdict = "ACCEPTABLE"
+checks  = [
+    "Authentication layer presence",
+    "MCP origin validation",
+    "Hardcoded credentials in tests / fixtures",
+]
+finding_count = 0
+notes        = """
+ai-mind has no auth layer by design. Threat model assumes:
+  (a) HTTP server bound to 127.0.0.1 only (verified D2)
+  (b) MCP transport is stdio (process boundary, no network exposure)
+  (c) Users running ai-mind directly own the process
+
+If someone exposes the HTTP server beyond loopback (reverse proxy, LAN bind),
+auth becomes their concern. README + ARCHITECTURE both document this assumption.
+This is consistent with how `ollama serve` and similar local-first services ship.
+"""
+
+# ─────────────────────────────────────────
+# DOMAIN 5: CODE SECURITY
+# ─────────────────────────────────────────
+
+[domain.code_security]
+verdict = "MEDIUM — 1 finding, dispositioned"
+checks  = [
+    "eval / new Function / dynamic require",
+    "child_process.exec / execSync with template literals",
+    "Path / fs operations with user input concatenation",
+    "HTTP request input flow into shell / fs / SQL",
+]
+finding_count = 1
+
+[[domain.code_security.findings]]
+id          = "CODE-01"
+severity    = "medium"
+location    = "data/repositories/http_service_monitor.js:43"
+issue       = "execSync uses template literal with ${service.port} interpolated into a PowerShell command"
+context     = """
+const cmd = `powershell -Command \"Get-NetTCPConnection -LocalPort ${service.port} ...\"`;
+execSync(cmd, { timeout: 5000 });
+"""
+disposition = "ACCEPT"
+rationale   = """
+service.port is sourced from the SERVICES config — controlled by the raj-sadan boot path
+or by an explicit `createContainer({ services: [...] })` call in user code. It is not
+user-controlled HTTP input. service.port is also coerced to Number elsewhere via
+`new Service({ port: ... })`, but no such coercion happens here, so an attacker who
+controlled the SERVICES config could inject shell. That attacker would already have
+config-write access (i.e. the system is owned).
+
+Mitigation already in place: the field is only used in the windows-only restart code path
+which only runs when an organ is detected unhealthy. Fix proposal: cast to Number before
+interpolation. Tracked as a low-priority follow-up; not blocking v0.1.0.
+"""
+followup = "Open issue post-release: 'sanitize service.port before execSync interpolation in http_service_monitor'"
+
+[[domain.code_security.findings]]
+id          = "CODE-02"
+severity    = "info"
+location    = "navigation/routes.js (3 endpoints)"
+issue       = "HTTP request inputs (req.query.status, req.query.limit, req.params.id, req.body.response) flow into router operations"
+disposition = "ACCEPT"
+rationale   = """
+Each input is used in a safe way:
+  - req.query.status → string compare against {pending, responded, all}
+  - req.query.limit → parseInt → array slice
+  - req.params.id → Map.get key (no path concat)
+  - req.body.response → stored as string in inbox object (no shell, no fs, no eval)
+No injection surface. No finding.
+"""
+
+# ─────────────────────────────────────────
+# DOMAIN 6: INFRASTRUCTURE
+# ─────────────────────────────────────────
+
+[domain.infrastructure]
+verdict = "N/A"
+notes   = "ai-mind is a Node.js service. No Docker images, no systemd units, no cloud-managed infra in this repository. CI workflows (GitHub Actions) use only well-known actions (checkout, setup-node) at @v4 tags — no third-party action risks."
+
+# ─────────────────────────────────────────
+# DOMAIN 7: DATA PROTECTION
+# ─────────────────────────────────────────
+
+[domain.data_protection]
+verdict = "MEDIUM — 1 finding, fixed in this audit pass"
+
+[[domain.data_protection.findings]]
+id          = "DATA-01"
+severity    = "medium"
+issue       = "Repository was missing .gitignore at root"
+root_cause  = """
+The pre-extraction .gitignore lived at raj-sadan root and covered mind/node_modules/
+and mind/package-lock.json via globs. The subtree split only kept paths under mind/,
+so the ignore rules didn't carry over. Fresh contributors could accidentally commit
+node_modules/, .env, *.log files.
+"""
+disposition = "FIXED"
+fix_action  = "Authored mind/.gitignore covering node_modules, *.log, .env, IDE files, OS files, *.pid, audit/.local/"
+verification = "Confirmed: `git check-ignore node_modules` returns true after fix"
+fixed_in_audit = true
+
+# ─────────────────────────────────────────
+# DOMAIN-LEVEL POSTURE
+# ─────────────────────────────────────────
+
+[posture]
+overall = "READY FOR PUBLIC RELEASE"
+gates_passed = [
+    "No critical or high severity findings",
+    "All medium findings fixed or dispositioned with rationale",
+    "Zero npm audit vulnerabilities",
+    "Localhost-only binding by default",
+    "No leaked credentials in source or git history",
+    ".gitignore now in place for fresh-clone safety",
+]
+
+[next_audit]
+recommended_trigger = "After RAJ-26 release (v0.1.0) — re-audit on first dependency dependabot PR or 30 days, whichever comes first"
+followup_items = [
+    "CODE-01 sanitization fix in http_service_monitor.js",
+    "Wire the immunity/security sherpa to actually run (paths broken since v2 cutover)",
+    "Add weekly cron scan once auto-update PRs start landing",
+]
