@@ -1,23 +1,25 @@
 name: Release
 
-# Triggers on a vX.Y.Z tag push. Builds the package, runs the full test
-# matrix one more time, then publishes a GitHub Release with notes drawn
-# from the matching CHANGELOG section.
+# Triggers on a vX.Y.Z tag push.
 #
-# npm publish is intentionally NOT wired here — until the npm name is
-# confirmed (`ai-mind` may be taken, fallback `@vraj0703/ai-mind`), we
-# publish manually. Add the `npm publish` step once the name is decided.
+# Pipeline:
+#   1. Verify the tag matches the version in package.json
+#   2. Run the full test suite + smoke
+#   3. npm publish with --provenance attestation (npm token via NPM_TOKEN secret)
+#   4. Create a GitHub Release with notes from the matching CHANGELOG section
 
 on:
   push:
     tags:
       - 'v*.*.*'
 
+permissions:
+  contents: write     # for the GitHub Release
+  id-token: write     # for npm provenance attestation
+
 jobs:
   release:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -25,18 +27,38 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22.x
+          node-version: '22.x'
+          registry-url: 'https://registry.npmjs.org'
           cache: npm
 
-      - run: npm ci
-      - run: npm test
-      - run: npm run test:smoke
+      - name: Verify tag matches package.json version
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "::error::Tag version ($TAG_VERSION) does not match package.json version ($PKG_VERSION)"
+            exit 1
+          fi
+          echo "Tag version $TAG_VERSION matches package.json"
+
+      - name: Install
+        run: npm ci
+
+      - name: Test
+        run: npm test
+
+      - name: Smoke
+        run: npm run test:smoke
+
+      - name: Publish to npm
+        run: npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Extract changelog section
         id: changelog
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          # Awk: print lines between this version's heading and the next
           NOTES=$(awk "/^## \[$VERSION\]/{flag=1; next} /^## \[/{flag=0} flag" CHANGELOG.md)
           {
             echo "notes<<EOF"

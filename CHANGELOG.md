@@ -4,6 +4,18 @@ All notable changes to `ai-mind` are documented here. Format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.1.1] — 2026-04-29
+
+### Changed (BREAKING — npm scope)
+
+- **Renamed npm package from `ai-mind` to `@raj-sadan/ai-mind`** to match the project's npm org. Update install: `npm install @raj-sadan/ai-mind`.
+- `release.yml` extended to wire `npm publish --access public --provenance` (was previously a placeholder building only GitHub Releases).
+- `publishConfig` added: `access: public`, `provenance: true`.
+
+### Note
+
+v0.1.0 existed only as a GitHub tag (never published to npm). v0.1.1 is the first npm publish under any name.
+
 ## [0.1.0] — 2026-04-26
 
 First public release. Extracted from [raj-sadan](https://github.com/vraj0703/raj-sadan) as a standalone cognitive layer.

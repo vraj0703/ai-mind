@@ -1,6 +1,10 @@
 {
-  "name": "ai-mind",
-  "version": "0.1.0",
+  "name": "@raj-sadan/ai-mind",
+  "version": "0.1.1",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "description": "Cognitive layer for AI agents — router, reasoner, supervisor, executor. Works standalone with built-in mocks; opts into real services when you have them.",
   "main": "index.js",
   "bin": {
